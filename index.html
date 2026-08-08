@@ -5,26 +5,38 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>配達管理テスト</title>
 <link rel="manifest" href="./manifest.json">
-<!-- iOSでホーム画面起動を全画面表示にするための指定 -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="配達管理">
 <meta name="theme-color" content="#ffffff">
 <style>body{font-family:system-ui;padding:16px;line-height:1.7}</style>
 </head>
 <body>
-<h1>表示確認 v0-2</h1>
+<h1>表示確認 v0-3</h1>
 <p id="t"></p>
 <p id="m"></p>
+<p id="s">SW: 確認中</p>
 <script>
 document.getElementById('t').textContent =
   '読み込み時刻: ' + new Date().toLocaleString('ja-JP');
 
-// ホーム画面から起動したかを判定して表示する
 var standalone =
   window.matchMedia('(display-mode: standalone)').matches ||
   window.navigator.standalone === true;
 document.getElementById('m').textContent =
   'ホーム画面から起動: ' + (standalone ? 'はい' : 'いいえ');
+
+// Service Workerを登録し、結果を画面に出す
+var s = document.getElementById('s');
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js')
+    .then(function () { s.textContent = 'SW: 登録済み'; })
+    .catch(function (err) {
+      s.textContent = 'SW: 登録失敗';
+      console.error(err);
+    });
+} else {
+  s.textContent = 'SW: 非対応';
+}
 </script>
 </body>
 </html>
