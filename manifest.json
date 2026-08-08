@@ -1,0 +1,10 @@
+{
+  "name": "配達売上・稼働管理",
+  "short_name": "配達管理",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "lang": "ja"
+}
