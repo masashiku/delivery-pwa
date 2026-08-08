@@ -17,7 +17,7 @@ h2{font-size:1.05rem;margin-top:24px}
 </style>
 </head>
 <body>
-<h1>通信テスト v0-4</h1>
+<h1>通信テスト v0-5</h1>
 <p id="s">SW: 確認中</p>
 
 <h2>接続設定</h2>
@@ -28,15 +28,16 @@ h2{font-size:1.05rem;margin-top:24px}
 <button id="save">保存</button>
 <p id="state">未設定</p>
 
+<h2>診断</h2>
+<button id="diag">保存済みトークンを照合</button>
+
 <h2>通信テスト</h2>
 <button id="ping">ping送信</button>
-<button id="bad">誤トークンで送信</button>
 <pre id="out">（未実行）</pre>
 
 <script>
 var KEY = 'dpwa_conf';
 
-// 設定の読み書き。トークンは画面へ再表示しない
 function loadConf() {
   try { return JSON.parse(localStorage.getItem(KEY) || 'null'); }
   catch (e) { return null; }
@@ -49,47 +50,49 @@ function refresh() {
 }
 function out(t) { document.getElementById('out').textContent = t; }
 
+// GAS側と同じ方式で短縮ハッシュを作る
+function hashPrefix(s) {
+  return crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+    .then(function (b) {
+      return Array.from(new Uint8Array(b))
+        .map(function (x) { return x.toString(16).padStart(2, '0'); })
+        .join('').slice(0, 12);
+    });
+}
+
 document.getElementById('save').onclick = function () {
   var url = document.getElementById('url').value.trim();
   var tok = document.getElementById('tok').value.trim();
   if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)) {
-    out('URLの形式が違います。/exec で終わるURLを入力してください。'); return;
+    out('URLの形式が違います。'); return;
   }
   if (tok.length < 32) { out('トークンが短すぎます。'); return; }
   localStorage.setItem(KEY, JSON.stringify({ url: url, token: tok }));
   document.getElementById('tok').value = '';
   refresh();
-  out('設定を保存しました。');
+  out('設定を保存しました。文字数: ' + tok.length);
 };
 
-// 独自ヘッダーを使わず、本文にJSONを入れて送る
-function call(payload) {
+document.getElementById('diag').onclick = function () {
+  var c = loadConf();
+  if (!c) { out('設定が未保存です。'); return; }
+  hashPrefix(c.token).then(function (h) {
+    out('保存済みトークン\n文字数: ' + c.token.length + '\nハッシュ: ' + h);
+  });
+};
+
+document.getElementById('ping').onclick = function () {
   var c = loadConf();
   if (!c) { out('設定が未保存です。'); return; }
   out('送信中...');
   fetch(c.url, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify({ token: c.token, action: 'ping', message: 'hello' })
   })
-  .then(function (r) {
-    return r.text().then(function (t) { return { status: r.status, text: t }; });
-  })
-  .then(function (r) {
-    var parsed = '（JSONとして解析できませんでした）';
-    try { parsed = JSON.stringify(JSON.parse(r.text), null, 2); } catch (e) {}
-    out('HTTP ' + r.status + '\n\n本文:\n' + r.text + '\n\n解析結果:\n' + parsed);
-  })
+  .then(function (r) { return r.text(); })
+  .then(function (t) { out(t); })
   .catch(function (e) { out('通信失敗: ' + e.message); });
-}
-
-document.getElementById('ping').onclick = function () {
-  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  call({ token: c.token, action: 'ping', message: 'hello' });
-};
-document.getElementById('bad').onclick = function () {
-  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  call({ token: c.token + 'x', action: 'ping', message: 'hello' });
 };
 
 var sw = document.getElementById('s');
