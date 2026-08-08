@@ -8,35 +8,98 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="配達管理">
 <meta name="theme-color" content="#ffffff">
-<style>body{font-family:system-ui;padding:16px;line-height:1.7}</style>
+<style>
+body{font-family:system-ui;padding:16px;line-height:1.7;max-width:640px}
+input{width:100%;padding:10px;font-size:16px;box-sizing:border-box}
+button{padding:12px 16px;font-size:16px;margin:4px 4px 4px 0}
+pre{background:#f2f2f2;padding:12px;white-space:pre-wrap;word-break:break-all}
+h2{font-size:1.05rem;margin-top:24px}
+</style>
 </head>
 <body>
-<h1>表示確認 v0-3</h1>
-<p id="t"></p>
-<p id="m"></p>
+<h1>通信テスト v0-4</h1>
 <p id="s">SW: 確認中</p>
+
+<h2>接続設定</h2>
+<p>GASのウェブアプリURL</p>
+<input id="url" type="url" placeholder="https://script.google.com/macros/s/.../exec">
+<p>トークン</p>
+<input id="tok" type="password" placeholder="発行した64桁の文字列">
+<button id="save">保存</button>
+<p id="state">未設定</p>
+
+<h2>通信テスト</h2>
+<button id="ping">ping送信</button>
+<button id="bad">誤トークンで送信</button>
+<pre id="out">（未実行）</pre>
+
 <script>
-document.getElementById('t').textContent =
-  '読み込み時刻: ' + new Date().toLocaleString('ja-JP');
+var KEY = 'dpwa_conf';
 
-var standalone =
-  window.matchMedia('(display-mode: standalone)').matches ||
-  window.navigator.standalone === true;
-document.getElementById('m').textContent =
-  'ホーム画面から起動: ' + (standalone ? 'はい' : 'いいえ');
+// 設定の読み書き。トークンは画面へ再表示しない
+function loadConf() {
+  try { return JSON.parse(localStorage.getItem(KEY) || 'null'); }
+  catch (e) { return null; }
+}
+function refresh() {
+  var c = loadConf();
+  document.getElementById('state').textContent =
+    c ? '保存済み（トークンは表示しません）' : '未設定';
+  if (c) document.getElementById('url').value = c.url;
+}
+function out(t) { document.getElementById('out').textContent = t; }
 
-// Service Workerを登録し、結果を画面に出す
-var s = document.getElementById('s');
+document.getElementById('save').onclick = function () {
+  var url = document.getElementById('url').value.trim();
+  var tok = document.getElementById('tok').value.trim();
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)) {
+    out('URLの形式が違います。/exec で終わるURLを入力してください。'); return;
+  }
+  if (tok.length < 32) { out('トークンが短すぎます。'); return; }
+  localStorage.setItem(KEY, JSON.stringify({ url: url, token: tok }));
+  document.getElementById('tok').value = '';
+  refresh();
+  out('設定を保存しました。');
+};
+
+// 独自ヘッダーを使わず、本文にJSONを入れて送る
+function call(payload) {
+  var c = loadConf();
+  if (!c) { out('設定が未保存です。'); return; }
+  out('送信中...');
+  fetch(c.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload)
+  })
+  .then(function (r) {
+    return r.text().then(function (t) { return { status: r.status, text: t }; });
+  })
+  .then(function (r) {
+    var parsed = '（JSONとして解析できませんでした）';
+    try { parsed = JSON.stringify(JSON.parse(r.text), null, 2); } catch (e) {}
+    out('HTTP ' + r.status + '\n\n本文:\n' + r.text + '\n\n解析結果:\n' + parsed);
+  })
+  .catch(function (e) { out('通信失敗: ' + e.message); });
+}
+
+document.getElementById('ping').onclick = function () {
+  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
+  call({ token: c.token, action: 'ping', message: 'hello' });
+};
+document.getElementById('bad').onclick = function () {
+  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
+  call({ token: c.token + 'x', action: 'ping', message: 'hello' });
+};
+
+var sw = document.getElementById('s');
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js')
-    .then(function () { s.textContent = 'SW: 登録済み'; })
-    .catch(function (err) {
-      s.textContent = 'SW: 登録失敗';
-      console.error(err);
-    });
-} else {
-  s.textContent = 'SW: 非対応';
-}
+    .then(function () { sw.textContent = 'SW: 登録済み'; })
+    .catch(function () { sw.textContent = 'SW: 登録失敗'; });
+} else { sw.textContent = 'SW: 非対応'; }
+
+refresh();
 </script>
 </body>
 </html>
