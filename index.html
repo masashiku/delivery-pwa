@@ -17,7 +17,7 @@ h2{font-size:1.05rem;margin-top:24px}
 </style>
 </head>
 <body>
-<h1>通信テスト v0-7</h1>
+<h1>通信テスト v0-8</h1>
 <p id="s">SW: 確認中</p>
 
 <h2>接続設定</h2>
@@ -43,7 +43,7 @@ h2{font-size:1.05rem;margin-top:24px}
 <script>
 var KEY = 'dpwa_conf';
 var QKEY = 'dpwa_queue';
-var lastReqId = null; // 「同じIDで再送」用に直前のIDを覚えておく
+var lastReqId = null;
 
 function loadConf() {
   try { return JSON.parse(localStorage.getItem(KEY) || 'null'); }
@@ -62,8 +62,6 @@ function refresh() {
   if (c) document.getElementById('url').value = c.url;
   document.getElementById('qstate').textContent = '未送信: ' + loadQueue().length + '件';
 }
-
-// 端末側で作る一意なID
 function newId() {
   return 'r' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
 }
@@ -81,16 +79,10 @@ document.getElementById('save').onclick = function () {
   out('設定を保存しました。');
 };
 
-/**
- * 送信の共通処理。
- * 応答がJSONでない場合（転送先の解決失敗など）は最大2回まで自動で再送する。
- * request_id を変えないため、同じ処理が二重に保存されることはない。
- */
-function send(payload, tries) {
-  tries = tries || 0;
+/** 1回だけ送る。JSONとして読めなければ例外にする */
+function postOnce(payload) {
   var c = loadConf();
   if (!c) return Promise.reject(new Error('設定が未保存です'));
-
   return fetch(c.url, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -98,49 +90,73 @@ function send(payload, tries) {
   })
   .then(function (r) { return r.text(); })
   .then(function (t) {
-    try { return { data: JSON.parse(t), tries: tries }; }
-    catch (e) {
-      if (tries >= 2) throw new Error('応答を読み取れませんでした（再送2回)');
-      return new Promise(function (res) { setTimeout(res, 800 * (tries + 1)); })
-        .then(function () { return send(payload, tries + 1); });
+    var d = JSON.parse(t); // 読めなければここで例外
+    // 転送の途中でGETとして届いた応答は、送信結果として扱わない
+    if (d.error === 'get_not_supported' || d.error === 'no_body') {
+      throw new Error('応答が失われました（' + d.error + '）');
     }
+    return d;
   });
 }
 
-function run(payload) {
-  out('送信中...');
-  send(payload)
-    .then(function (r) {
-      out(JSON.stringify(r.data, null, 2) +
-          '\n\n再送回数: ' + r.tries);
-    })
-    .catch(function (e) { out('失敗: ' + e.message); });
+/** 保存済みかどうかを問い合わせる */
+function checkSaved(reqId) {
+  var c = loadConf();
+  return postOnce({ token: c.token, action: 'checkRequest', request_id: reqId });
 }
+
+/**
+ * 書き込みの送信。
+ * 応答が失われた場合は、少し待ってから保存状況を問い合わせて成否を判定する。
+ */
+function sendWrite(reqId, message) {
+  var c = loadConf();
+  return postOnce({
+    token: c.token, action: 'writeTest',
+    message: message, request_id: reqId
+  })
+  .catch(function (e1) {
+    return new Promise(function (res) { setTimeout(res, 1200); })
+      .then(function () { return checkSaved(reqId); })
+      .then(function (d) {
+        if (d.ok && d.saved) {
+          return { ok: true, action: 'writeTest', testId: d.testId, recovered: true };
+        }
+        throw new Error('未保存のままです（' + e1.message + '）');
+      });
+  });
+}
+
+function show(d) { out(JSON.stringify(d, null, 2)); }
+function fail(e) { out('失敗: ' + e.message); }
 
 document.getElementById('ping').onclick = function () {
   var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  run({ token: c.token, action: 'ping', message: 'hello' });
+  out('送信中...');
+  postOnce({ token: c.token, action: 'ping', message: 'hello' }).then(show).catch(fail);
 };
 document.getElementById('read').onclick = function () {
   var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  run({ token: c.token, action: 'readTest' });
+  out('送信中...');
+  postOnce({ token: c.token, action: 'readTest' }).then(show).catch(fail);
 };
 document.getElementById('write').onclick = function () {
   var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
+  out('送信中...');
   lastReqId = newId();
-  run({ token: c.token, action: 'writeTest', message: '書き込みテスト', request_id: lastReqId });
+  sendWrite(lastReqId, '書き込みテスト').then(show).catch(fail);
 };
 document.getElementById('retry').onclick = function () {
-  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
   if (!lastReqId) { out('先に「シート書き込み」を実行してください。'); return; }
-  run({ token: c.token, action: 'writeTest', message: '書き込みテスト', request_id: lastReqId });
+  out('送信中...');
+  sendWrite(lastReqId, '書き込みテスト').then(show).catch(fail);
 };
 document.getElementById('bad').onclick = function () {
   var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  run({ token: c.token.slice(0, -1) + 'z', action: 'ping', message: 'hello' });
+  out('送信中...');
+  postOnce({ token: c.token.slice(0, -1) + 'z', action: 'ping' }).then(show).catch(fail);
 };
 
-// 通信せずキューへ積む（オフライン時の挙動の代わり）
 document.getElementById('qadd').onclick = function () {
   var q = loadQueue();
   q.push({
@@ -152,7 +168,7 @@ document.getElementById('qadd').onclick = function () {
   out('未送信キューへ1件追加しました。アプリを閉じても残ります。');
 };
 
-// キューを先頭から順に送り、成功した分だけ取り除く
+/** キューを先頭から順に送り、成功した分だけ取り除く */
 document.getElementById('qsend').onclick = function () {
   var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
   if (!loadQueue().length) { out('未送信はありません。'); return; }
@@ -164,26 +180,20 @@ document.getElementById('qsend').onclick = function () {
     if (!q.length) { refresh(); out(log.join('\n')); return; }
     var item = q[0];
 
-    send({
-      token: c.token, action: 'writeTest',
-      message: item.message, request_id: item.request_id
-    })
-    .then(function (r) {
-      if (r.data.ok) {
+    sendWrite(item.request_id, item.message)
+      .then(function (d) {
         var rest = loadQueue();
         rest.shift();
         saveQueue(rest);
-        log.push('送信成功: ' + r.data.testId + (r.data.duplicate ? '（重複のため追加なし）' : ''));
+        log.push('送信成功: ' + d.testId +
+          (d.duplicate ? '（重複のため追加なし）' : '') +
+          (d.recovered ? '（照会で確認）' : ''));
         next();
-      } else {
-        log.push('拒否: ' + r.data.error + '（キューへ保持）');
+      })
+      .catch(function (e) {
+        log.push('キューへ保持: ' + e.message);
         refresh(); out(log.join('\n'));
-      }
-    })
-    .catch(function (e) {
-      log.push('通信失敗のためキューへ保持: ' + e.message);
-      refresh(); out(log.join('\n'));
-    });
+      });
   })();
 };
 
