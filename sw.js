@@ -1,5 +1,5 @@
 // キャッシュ名。ファイルを更新したら末尾の番号を上げる
-const CACHE_NAME = 'dpwa-v0-7';
+const CACHE_NAME = 'dpwa-v0-8';
 
 // オフラインでも開けるようにする対象
 const ASSETS = ['./', './index.html', './manifest.json'];
