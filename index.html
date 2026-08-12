@@ -17,7 +17,7 @@ h2{font-size:1.05rem;margin-top:24px}
 </style>
 </head>
 <body>
-<h1>通信テスト v0-6</h1>
+<h1>通信テスト v0-7</h1>
 <p id="s">SW: 確認中</p>
 
 <h2>接続設定</h2>
@@ -30,6 +30,7 @@ h2{font-size:1.05rem;margin-top:24px}
 <button id="ping">ping送信</button>
 <button id="read">シート読み取り</button>
 <button id="write">シート書き込み</button>
+<button id="retry">同じIDで再送</button>
 <button id="bad">誤トークン送信</button>
 
 <h2>未送信キュー</h2>
@@ -42,6 +43,7 @@ h2{font-size:1.05rem;margin-top:24px}
 <script>
 var KEY = 'dpwa_conf';
 var QKEY = 'dpwa_queue';
+var lastReqId = null; // 「同じIDで再送」用に直前のIDを覚えておく
 
 function loadConf() {
   try { return JSON.parse(localStorage.getItem(KEY) || 'null'); }
@@ -61,6 +63,11 @@ function refresh() {
   document.getElementById('qstate').textContent = '未送信: ' + loadQueue().length + '件';
 }
 
+// 端末側で作る一意なID
+function newId() {
+  return 'r' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+}
+
 document.getElementById('save').onclick = function () {
   var url = document.getElementById('url').value.trim();
   var tok = document.getElementById('tok').value.trim();
@@ -74,22 +81,40 @@ document.getElementById('save').onclick = function () {
   out('設定を保存しました。');
 };
 
-// 送信の共通処理。成功時のみ本文を返す
-function send(payload) {
+/**
+ * 送信の共通処理。
+ * 応答がJSONでない場合（転送先の解決失敗など）は最大2回まで自動で再送する。
+ * request_id を変えないため、同じ処理が二重に保存されることはない。
+ */
+function send(payload, tries) {
+  tries = tries || 0;
   var c = loadConf();
   if (!c) return Promise.reject(new Error('設定が未保存です'));
+
   return fetch(c.url, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(payload)
-  }).then(function (r) { return r.text(); });
+  })
+  .then(function (r) { return r.text(); })
+  .then(function (t) {
+    try { return { data: JSON.parse(t), tries: tries }; }
+    catch (e) {
+      if (tries >= 2) throw new Error('応答を読み取れませんでした（再送2回)');
+      return new Promise(function (res) { setTimeout(res, 800 * (tries + 1)); })
+        .then(function () { return send(payload, tries + 1); });
+    }
+  });
 }
 
 function run(payload) {
   out('送信中...');
   send(payload)
-    .then(function (t) { out(t); })
-    .catch(function (e) { out('通信失敗: ' + e.message); });
+    .then(function (r) {
+      out(JSON.stringify(r.data, null, 2) +
+          '\n\n再送回数: ' + r.tries);
+    })
+    .catch(function (e) { out('失敗: ' + e.message); });
 }
 
 document.getElementById('ping').onclick = function () {
@@ -102,7 +127,13 @@ document.getElementById('read').onclick = function () {
 };
 document.getElementById('write').onclick = function () {
   var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  run({ token: c.token, action: 'writeTest', message: '書き込みテスト' });
+  lastReqId = newId();
+  run({ token: c.token, action: 'writeTest', message: '書き込みテスト', request_id: lastReqId });
+};
+document.getElementById('retry').onclick = function () {
+  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
+  if (!lastReqId) { out('先に「シート書き込み」を実行してください。'); return; }
+  run({ token: c.token, action: 'writeTest', message: '書き込みテスト', request_id: lastReqId });
 };
 document.getElementById('bad').onclick = function () {
   var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
@@ -112,33 +143,47 @@ document.getElementById('bad').onclick = function () {
 // 通信せずキューへ積む（オフライン時の挙動の代わり）
 document.getElementById('qadd').onclick = function () {
   var q = loadQueue();
-  q.push({ id: 'q' + Date.now(), message: 'キュー投入 ' + new Date().toLocaleTimeString('ja-JP') });
+  q.push({
+    request_id: newId(),
+    message: 'キュー投入 ' + new Date().toLocaleTimeString('ja-JP')
+  });
   saveQueue(q);
   refresh();
   out('未送信キューへ1件追加しました。アプリを閉じても残ります。');
 };
 
-// キューを順に送り、成功した分だけ取り除く
+// キューを先頭から順に送り、成功した分だけ取り除く
 document.getElementById('qsend').onclick = function () {
   var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  var q = loadQueue();
-  if (!q.length) { out('未送信はありません。'); return; }
+  if (!loadQueue().length) { out('未送信はありません。'); return; }
   out('送信中...');
   var log = [];
+
   (function next() {
-    if (!q.length) { saveQueue(q); refresh(); out(log.join('\n')); return; }
+    var q = loadQueue();
+    if (!q.length) { refresh(); out(log.join('\n')); return; }
     var item = q[0];
-    send({ token: c.token, action: 'writeTest', message: item.message })
-      .then(function (t) {
-        if (t.indexOf('"ok":true') >= 0) { q.shift(); log.push('送信成功: ' + item.id); }
-        else { log.push('拒否: ' + t); q = []; }
-        saveQueue(loadQueue().slice(log.length));
+
+    send({
+      token: c.token, action: 'writeTest',
+      message: item.message, request_id: item.request_id
+    })
+    .then(function (r) {
+      if (r.data.ok) {
+        var rest = loadQueue();
+        rest.shift();
+        saveQueue(rest);
+        log.push('送信成功: ' + r.data.testId + (r.data.duplicate ? '（重複のため追加なし）' : ''));
         next();
-      })
-      .catch(function (e) {
-        log.push('通信失敗のため保持: ' + e.message);
-        saveQueue(q); refresh(); out(log.join('\n'));
-      });
+      } else {
+        log.push('拒否: ' + r.data.error + '（キューへ保持）');
+        refresh(); out(log.join('\n'));
+      }
+    })
+    .catch(function (e) {
+      log.push('通信失敗のためキューへ保持: ' + e.message);
+      refresh(); out(log.join('\n'));
+    });
   })();
 };
 
