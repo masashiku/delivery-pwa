@@ -17,47 +17,48 @@ h2{font-size:1.05rem;margin-top:24px}
 </style>
 </head>
 <body>
-<h1>通信テスト v0-5</h1>
+<h1>通信テスト v0-6</h1>
 <p id="s">SW: 確認中</p>
 
 <h2>接続設定</h2>
-<p>GASのウェブアプリURL</p>
-<input id="url" type="url" placeholder="https://script.google.com/macros/s/.../exec">
-<p>トークン</p>
-<input id="tok" type="password" placeholder="発行した64桁の文字列">
+<input id="url" type="url" placeholder="GASのウェブアプリURL（/exec）">
+<input id="tok" type="password" placeholder="トークン" style="margin-top:8px">
 <button id="save">保存</button>
 <p id="state">未設定</p>
 
-<h2>診断</h2>
-<button id="diag">保存済みトークンを照合</button>
-
 <h2>通信テスト</h2>
 <button id="ping">ping送信</button>
+<button id="read">シート読み取り</button>
+<button id="write">シート書き込み</button>
+<button id="bad">誤トークン送信</button>
+
+<h2>未送信キュー</h2>
+<button id="qadd">未送信として1件追加</button>
+<button id="qsend">未送信を送信</button>
+<p id="qstate">未送信: 0件</p>
+
 <pre id="out">（未実行）</pre>
 
 <script>
 var KEY = 'dpwa_conf';
+var QKEY = 'dpwa_queue';
 
 function loadConf() {
   try { return JSON.parse(localStorage.getItem(KEY) || 'null'); }
   catch (e) { return null; }
 }
+function loadQueue() {
+  try { return JSON.parse(localStorage.getItem(QKEY) || '[]'); }
+  catch (e) { return []; }
+}
+function saveQueue(q) { localStorage.setItem(QKEY, JSON.stringify(q)); }
+function out(t) { document.getElementById('out').textContent = t; }
 function refresh() {
   var c = loadConf();
   document.getElementById('state').textContent =
     c ? '保存済み（トークンは表示しません）' : '未設定';
   if (c) document.getElementById('url').value = c.url;
-}
-function out(t) { document.getElementById('out').textContent = t; }
-
-// GAS側と同じ方式で短縮ハッシュを作る
-function hashPrefix(s) {
-  return crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
-    .then(function (b) {
-      return Array.from(new Uint8Array(b))
-        .map(function (x) { return x.toString(16).padStart(2, '0'); })
-        .join('').slice(0, 12);
-    });
+  document.getElementById('qstate').textContent = '未送信: ' + loadQueue().length + '件';
 }
 
 document.getElementById('save').onclick = function () {
@@ -70,29 +71,75 @@ document.getElementById('save').onclick = function () {
   localStorage.setItem(KEY, JSON.stringify({ url: url, token: tok }));
   document.getElementById('tok').value = '';
   refresh();
-  out('設定を保存しました。文字数: ' + tok.length);
+  out('設定を保存しました。');
 };
 
-document.getElementById('diag').onclick = function () {
+// 送信の共通処理。成功時のみ本文を返す
+function send(payload) {
   var c = loadConf();
-  if (!c) { out('設定が未保存です。'); return; }
-  hashPrefix(c.token).then(function (h) {
-    out('保存済みトークン\n文字数: ' + c.token.length + '\nハッシュ: ' + h);
-  });
-};
-
-document.getElementById('ping').onclick = function () {
-  var c = loadConf();
-  if (!c) { out('設定が未保存です。'); return; }
-  out('送信中...');
-  fetch(c.url, {
+  if (!c) return Promise.reject(new Error('設定が未保存です'));
+  return fetch(c.url, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ token: c.token, action: 'ping', message: 'hello' })
-  })
-  .then(function (r) { return r.text(); })
-  .then(function (t) { out(t); })
-  .catch(function (e) { out('通信失敗: ' + e.message); });
+    body: JSON.stringify(payload)
+  }).then(function (r) { return r.text(); });
+}
+
+function run(payload) {
+  out('送信中...');
+  send(payload)
+    .then(function (t) { out(t); })
+    .catch(function (e) { out('通信失敗: ' + e.message); });
+}
+
+document.getElementById('ping').onclick = function () {
+  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
+  run({ token: c.token, action: 'ping', message: 'hello' });
+};
+document.getElementById('read').onclick = function () {
+  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
+  run({ token: c.token, action: 'readTest' });
+};
+document.getElementById('write').onclick = function () {
+  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
+  run({ token: c.token, action: 'writeTest', message: '書き込みテスト' });
+};
+document.getElementById('bad').onclick = function () {
+  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
+  run({ token: c.token.slice(0, -1) + 'z', action: 'ping', message: 'hello' });
+};
+
+// 通信せずキューへ積む（オフライン時の挙動の代わり）
+document.getElementById('qadd').onclick = function () {
+  var q = loadQueue();
+  q.push({ id: 'q' + Date.now(), message: 'キュー投入 ' + new Date().toLocaleTimeString('ja-JP') });
+  saveQueue(q);
+  refresh();
+  out('未送信キューへ1件追加しました。アプリを閉じても残ります。');
+};
+
+// キューを順に送り、成功した分だけ取り除く
+document.getElementById('qsend').onclick = function () {
+  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
+  var q = loadQueue();
+  if (!q.length) { out('未送信はありません。'); return; }
+  out('送信中...');
+  var log = [];
+  (function next() {
+    if (!q.length) { saveQueue(q); refresh(); out(log.join('\n')); return; }
+    var item = q[0];
+    send({ token: c.token, action: 'writeTest', message: item.message })
+      .then(function (t) {
+        if (t.indexOf('"ok":true') >= 0) { q.shift(); log.push('送信成功: ' + item.id); }
+        else { log.push('拒否: ' + t); q = []; }
+        saveQueue(loadQueue().slice(log.length));
+        next();
+      })
+      .catch(function (e) {
+        log.push('通信失敗のため保持: ' + e.message);
+        saveQueue(q); refresh(); out(log.join('\n'));
+      });
+  })();
 };
 
 var sw = document.getElementById('s');
