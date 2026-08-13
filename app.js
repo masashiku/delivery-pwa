@@ -22,6 +22,7 @@ function loadLocal(d) {
   try { return JSON.parse(localStorage.getItem(localKey(d)) || '[]'); } catch (e) { return []; }
 }
 function newId() { return 'r' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
+function setMsg(t) { $('msg').textContent = t || ''; }
 
 /* 通信 */
 function postOnce(payload) {
@@ -33,10 +34,13 @@ function postOnce(payload) {
     body: JSON.stringify(payload)
   }).then(function (r) { return r.text(); })
     .then(function (t) {
-      var d = JSON.parse(t);
+      var d;
+      try { d = JSON.parse(t); }
+      catch (e) { throw new Error('応答を読み取れません'); }
       if (d.error === 'get_not_supported' || d.error === 'no_body') {
         throw new Error('応答が失われました');
       }
+      if (d.ok === false) throw new Error('拒否: ' + d.error);
       return d;
     });
 }
@@ -50,9 +54,13 @@ function sendSale(item) {
     company_code: item.company, amount: item.amount
   }).catch(function (e1) {
     return new Promise(function (res) { setTimeout(res, 1200); })
-      .then(function () { return postOnce({ token: c.token, action: 'listSales', delivery_date: item.date }); })
+      .then(function () {
+        return postOnce({ token: c.token, action: 'listSales', delivery_date: item.date });
+      })
       .then(function (d) {
-        var hit = (d.sales || []).filter(function (s) { return s.request_id === item.request_id; })[0];
+        var hit = (d.sales || []).filter(function (s) {
+          return s.request_id === item.request_id;
+        })[0];
         if (hit) return { ok: true, sale: hit };
         throw e1;
       });
@@ -61,31 +69,40 @@ function sendSale(item) {
 
 /* 未送信をまとめて送る */
 function flush() {
+  if (!loadConf()) { setMsg('接続設定が未入力です。下の「接続設定」を開いて入力してください。'); return; }
   var pending = state.sales.filter(function (s) { return !s.synced; });
-  if (!pending.length || !loadConf()) { render(); return; }
-  var i = 0;
+  if (!pending.length) { render(); return; }
+  setMsg('送信中...');
+  var i = 0, err = null;
   (function next() {
-    if (i >= pending.length) { saveLocal(); render(); return; }
+    if (i >= pending.length) {
+      saveLocal(); render();
+      setMsg(err ? '送信できませんでした（' + err + '）' : '');
+      return;
+    }
     var item = pending[i++];
     sendSale(item).then(function (d) {
       if (d.ok) { item.synced = true; item.sale_id = d.sale.sale_id; }
       saveLocal(); render(); next();
-    }).catch(function () { saveLocal(); render(); });
+    }).catch(function (e) {
+      err = e.message;
+      saveLocal(); render();
+      setMsg('送信できませんでした（' + err + '）');
+    });
   })();
 }
 
 /* サーバー側の当日データを取り込む */
 function syncFromServer() {
+  if (!loadConf()) return;
   var c = loadConf();
-  if (!c) return;
   postOnce({ token: c.token, action: 'listSales', delivery_date: state.date })
     .then(function (d) {
-      if (!d.ok) return;
       var known = {};
-      d.sales.forEach(function (s) {
-        known[s.request_id] = true;
+      d.sales.forEach(function (s) { known[s.request_id] = true; });
+      var pending = state.sales.filter(function (s) {
+        return !s.synced && !known[s.request_id];
       });
-      var pending = state.sales.filter(function (s) { return !s.synced && !known[s.request_id]; });
       state.sales = d.sales.map(function (s) {
         return {
           request_id: s.request_id, sale_id: s.sale_id, date: s.delivery_date,
@@ -96,7 +113,6 @@ function syncFromServer() {
     }).catch(function () {});
 }
 
-/* 時刻の検証 */
 function parseTime(v) {
   if (!/^\d{4}$/.test(v)) return null;
   var h = Number(v.slice(0, 2)), m = Number(v.slice(2));
@@ -104,7 +120,6 @@ function parseTime(v) {
   return v.slice(0, 2) + ':' + v.slice(2);
 }
 
-/* 表示更新 */
 function render() {
   $('date').value = state.date;
   var isToday = state.date === todayStr();
@@ -121,8 +136,7 @@ function render() {
   });
   var last = state.sales[state.sales.length - 1];
   $('last').textContent = last
-    ? jpDate(last.date).replace('年', '/').replace('月', '/').replace('日', '') +
-      ' ' + last.time + '　' + last.company + '　' + last.amount + '円　' +
+    ? last.date + ' ' + last.time + '　' + last.company + '　' + last.amount + '円　' +
       (last.synced ? '同期済み' : '未送信')
     : '（まだありません）';
 
@@ -143,9 +157,10 @@ function render() {
       '<td class="r">' + s.amount + '円</td>' +
       '<td class="r">' + (s.synced ? '' : '未送信') + '</td></tr>';
   }).join('');
+
+  $('confState').textContent = loadConf() ? '保存済み' : '未設定';
 }
 
-/* 日付の切り替え */
 function setDate(d, manual) {
   state.date = d;
   state.manual = !!manual;
@@ -154,22 +169,20 @@ function setDate(d, manual) {
   syncFromServer();
 }
 
-/* 確定 */
 function confirmSale() {
-  $('msg').textContent = '';
+  setMsg('');
   var raw = $('time').value.replace(/\D/g, '');
   if (raw.length === 3) raw = '0' + raw;
   var time = parseTime(raw);
-  if (!time) { $('msg').textContent = '時間が正しくありません。'; return; }
+  if (!time) { setMsg('時間が正しくありません。'); return; }
 
   var amtRaw = $('amount').value.trim();
   if (amtRaw === '' || !/^\d+$/.test(amtRaw)) {
-    $('msg').textContent = '金額を0以上の整数で入力してください。'; return;
+    setMsg('金額を0以上の整数で入力してください。'); return;
   }
   var amount = Number(amtRaw);
-  if (!state.company) { $('msg').textContent = '会社を選択してください。'; return; }
+  if (!state.company) { setMsg('会社を選択してください。'); return; }
 
-  // 直前と同じ内容が3秒以内なら確認する
   var sig = state.date + time + state.company + amount;
   var now = Date.now();
   if (state.lastConfirm && state.lastConfirm.sig === sig &&
@@ -178,11 +191,10 @@ function confirmSale() {
   }
   state.lastConfirm = { sig: sig, at: now };
 
-  var item = {
+  state.sales.push({
     request_id: newId(), date: state.date, time: time,
     company: state.company, amount: amount, synced: false
-  };
-  state.sales.push(item);
+  });
   saveLocal();
 
   $('time').value = '';
@@ -192,7 +204,6 @@ function confirmSale() {
   flush();
 }
 
-/* 初期化 */
 window.addEventListener('DOMContentLoaded', function () {
   setDate(todayStr(), false);
   state.company = localStorage.getItem(COMPANY_KEY) || null;
@@ -207,7 +218,6 @@ window.addEventListener('DOMContentLoaded', function () {
     this.value = this.value.replace(/\D/g, '').slice(0, 4);
     if (this.value.length === 4 && parseTime(this.value)) $('amount').focus();
   });
-  // 3桁は入力途中の可能性があるため、離れた時点で0を補う
   $('time').addEventListener('blur', function () {
     var v = this.value.replace(/\D/g, '');
     if (v.length === 3) this.value = '0' + v;
@@ -224,7 +234,22 @@ window.addEventListener('DOMContentLoaded', function () {
   $('confirm').onclick = confirmSale;
   $('resend').onclick = flush;
 
-  // 0時を過ぎたら日付を切り替える（手動変更中は行わない）
+  $('confSave').onclick = function () {
+    var url = $('confUrl').value.trim();
+    var tok = $('confTok').value.trim();
+    if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)) {
+      setMsg('URLの形式が違います。'); return;
+    }
+    if (tok.length < 32) { setMsg('トークンが短すぎます。'); return; }
+    localStorage.setItem(CONF_KEY, JSON.stringify({ url: url, token: tok }));
+    $('confTok').value = '';
+    render();
+    setMsg('接続設定を保存しました。');
+    flush();
+  };
+  var c = loadConf();
+  if (c) $('confUrl').value = c.url;
+
   setInterval(function () {
     if (!state.manual && state.date !== todayStr()) setDate(todayStr(), false);
   }, 30000);
