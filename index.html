@@ -3,208 +3,53 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>配達管理テスト</title>
+<title>配達管理</title>
 <link rel="manifest" href="./manifest.json">
+<link rel="stylesheet" href="./style.css">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="配達管理">
 <meta name="theme-color" content="#ffffff">
-<style>
-body{font-family:system-ui;padding:16px;line-height:1.7;max-width:640px}
-input{width:100%;padding:10px;font-size:16px;box-sizing:border-box}
-button{padding:12px 16px;font-size:16px;margin:4px 4px 4px 0}
-pre{background:#f2f2f2;padding:12px;white-space:pre-wrap;word-break:break-all}
-h2{font-size:1.05rem;margin-top:24px}
-</style>
 </head>
 <body>
-<h1>通信テスト v0-8</h1>
-<p id="s">SW: 確認中</p>
+<h1>売上入力 v1-1</h1>
 
-<h2>接続設定</h2>
-<input id="url" type="url" placeholder="GASのウェブアプリURL（/exec）">
-<input id="tok" type="password" placeholder="トークン" style="margin-top:8px">
-<button id="save">保存</button>
-<p id="state">未設定</p>
+<label for="date">日付</label>
+<div class="row">
+  <input id="date" type="date">
+  <button id="backToday" class="small">今日に戻す</button>
+</div>
+<div id="dateNote" class="note" style="display:none"></div>
 
-<h2>通信テスト</h2>
-<button id="ping">ping送信</button>
-<button id="read">シート読み取り</button>
-<button id="write">シート書き込み</button>
-<button id="retry">同じIDで再送</button>
-<button id="bad">誤トークン送信</button>
+<label for="time">時間（4桁または3桁の数字）</label>
+<input id="time" type="tel" inputmode="numeric" placeholder="1456">
 
-<h2>未送信キュー</h2>
-<button id="qadd">未送信として1件追加</button>
-<button id="qsend">未送信を送信</button>
-<p id="qstate">未送信: 0件</p>
+<label for="amount">売上金額</label>
+<input id="amount" type="tel" inputmode="numeric" placeholder="650">
 
-<pre id="out">（未実行）</pre>
+<label>会社</label>
+<div class="companies">
+  <button data-code="う">う</button>
+  <button data-code="で">で</button>
+  <button data-code="ろ">ろ</button>
+  <button data-code="め">め</button>
+</div>
 
-<script>
-var KEY = 'dpwa_conf';
-var QKEY = 'dpwa_queue';
-var lastReqId = null;
+<button id="confirm" class="confirm">確定</button>
+<div id="msg" class="msg"></div>
 
-function loadConf() {
-  try { return JSON.parse(localStorage.getItem(KEY) || 'null'); }
-  catch (e) { return null; }
-}
-function loadQueue() {
-  try { return JSON.parse(localStorage.getItem(QKEY) || '[]'); }
-  catch (e) { return []; }
-}
-function saveQueue(q) { localStorage.setItem(QKEY, JSON.stringify(q)); }
-function out(t) { document.getElementById('out').textContent = t; }
-function refresh() {
-  var c = loadConf();
-  document.getElementById('state').textContent =
-    c ? '保存済み（トークンは表示しません）' : '未設定';
-  if (c) document.getElementById('url').value = c.url;
-  document.getElementById('qstate').textContent = '未送信: ' + loadQueue().length + '件';
-}
-function newId() {
-  return 'r' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-}
+<div class="card">
+  <div style="font-size:.85rem;color:#555">直前の登録</div>
+  <div id="last">（まだありません）</div>
+  <button id="resend" class="small" style="margin-top:8px">未送信を再送</button>
+</div>
 
-document.getElementById('save').onclick = function () {
-  var url = document.getElementById('url').value.trim();
-  var tok = document.getElementById('tok').value.trim();
-  if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)) {
-    out('URLの形式が違います。'); return;
-  }
-  if (tok.length < 32) { out('トークンが短すぎます。'); return; }
-  localStorage.setItem(KEY, JSON.stringify({ url: url, token: tok }));
-  document.getElementById('tok').value = '';
-  refresh();
-  out('設定を保存しました。');
-};
+<div class="card" id="sum"></div>
 
-/** 1回だけ送る。JSONとして読めなければ例外にする */
-function postOnce(payload) {
-  var c = loadConf();
-  if (!c) return Promise.reject(new Error('設定が未保存です'));
-  return fetch(c.url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(payload)
-  })
-  .then(function (r) { return r.text(); })
-  .then(function (t) {
-    var d = JSON.parse(t); // 読めなければここで例外
-    // 転送の途中でGETとして届いた応答は、送信結果として扱わない
-    if (d.error === 'get_not_supported' || d.error === 'no_body') {
-      throw new Error('応答が失われました（' + d.error + '）');
-    }
-    return d;
-  });
-}
+<div class="card">
+  <div style="font-size:.85rem;color:#555">本日の一覧（配達日時順）</div>
+  <table><tbody id="list"></tbody></table>
+</div>
 
-/** 保存済みかどうかを問い合わせる */
-function checkSaved(reqId) {
-  var c = loadConf();
-  return postOnce({ token: c.token, action: 'checkRequest', request_id: reqId });
-}
-
-/**
- * 書き込みの送信。
- * 応答が失われた場合は、少し待ってから保存状況を問い合わせて成否を判定する。
- */
-function sendWrite(reqId, message) {
-  var c = loadConf();
-  return postOnce({
-    token: c.token, action: 'writeTest',
-    message: message, request_id: reqId
-  })
-  .catch(function (e1) {
-    return new Promise(function (res) { setTimeout(res, 1200); })
-      .then(function () { return checkSaved(reqId); })
-      .then(function (d) {
-        if (d.ok && d.saved) {
-          return { ok: true, action: 'writeTest', testId: d.testId, recovered: true };
-        }
-        throw new Error('未保存のままです（' + e1.message + '）');
-      });
-  });
-}
-
-function show(d) { out(JSON.stringify(d, null, 2)); }
-function fail(e) { out('失敗: ' + e.message); }
-
-document.getElementById('ping').onclick = function () {
-  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  out('送信中...');
-  postOnce({ token: c.token, action: 'ping', message: 'hello' }).then(show).catch(fail);
-};
-document.getElementById('read').onclick = function () {
-  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  out('送信中...');
-  postOnce({ token: c.token, action: 'readTest' }).then(show).catch(fail);
-};
-document.getElementById('write').onclick = function () {
-  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  out('送信中...');
-  lastReqId = newId();
-  sendWrite(lastReqId, '書き込みテスト').then(show).catch(fail);
-};
-document.getElementById('retry').onclick = function () {
-  if (!lastReqId) { out('先に「シート書き込み」を実行してください。'); return; }
-  out('送信中...');
-  sendWrite(lastReqId, '書き込みテスト').then(show).catch(fail);
-};
-document.getElementById('bad').onclick = function () {
-  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  out('送信中...');
-  postOnce({ token: c.token.slice(0, -1) + 'z', action: 'ping' }).then(show).catch(fail);
-};
-
-document.getElementById('qadd').onclick = function () {
-  var q = loadQueue();
-  q.push({
-    request_id: newId(),
-    message: 'キュー投入 ' + new Date().toLocaleTimeString('ja-JP')
-  });
-  saveQueue(q);
-  refresh();
-  out('未送信キューへ1件追加しました。アプリを閉じても残ります。');
-};
-
-/** キューを先頭から順に送り、成功した分だけ取り除く */
-document.getElementById('qsend').onclick = function () {
-  var c = loadConf(); if (!c) { out('設定が未保存です。'); return; }
-  if (!loadQueue().length) { out('未送信はありません。'); return; }
-  out('送信中...');
-  var log = [];
-
-  (function next() {
-    var q = loadQueue();
-    if (!q.length) { refresh(); out(log.join('\n')); return; }
-    var item = q[0];
-
-    sendWrite(item.request_id, item.message)
-      .then(function (d) {
-        var rest = loadQueue();
-        rest.shift();
-        saveQueue(rest);
-        log.push('送信成功: ' + d.testId +
-          (d.duplicate ? '（重複のため追加なし）' : '') +
-          (d.recovered ? '（照会で確認）' : ''));
-        next();
-      })
-      .catch(function (e) {
-        log.push('キューへ保持: ' + e.message);
-        refresh(); out(log.join('\n'));
-      });
-  })();
-};
-
-var sw = document.getElementById('s');
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js')
-    .then(function () { sw.textContent = 'SW: 登録済み'; })
-    .catch(function () { sw.textContent = 'SW: 登録失敗'; });
-} else { sw.textContent = 'SW: 非対応'; }
-
-refresh();
-</script>
+<script src="./app.js"></script>
 </body>
 </html>
