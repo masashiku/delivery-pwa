@@ -1,0 +1,27 @@
+*{box-sizing:border-box}
+body{font-family:system-ui;margin:0;padding:12px 12px 80px;line-height:1.6;
+  max-width:640px;-webkit-text-size-adjust:100%}
+h1{font-size:1.1rem;margin:4px 0 12px}
+label{display:block;font-size:.85rem;color:#555;margin-top:12px}
+input{width:100%;padding:12px;font-size:17px;border:1px solid #bbb;border-radius:8px}
+.row{display:flex;gap:8px;align-items:center}
+.row input{flex:1}
+.note{background:#fff6e0;border:1px solid #e0c67a;padding:8px;border-radius:8px;
+  margin-top:8px;font-size:.9rem}
+.companies{display:flex;gap:8px;margin-top:8px}
+.companies button{flex:1;padding:16px 0;font-size:20px;border:2px solid #bbb;
+  background:#fff;border-radius:8px}
+.companies button.on{border-color:#1a73e8;background:#e8f0fe;color:#1a73e8}
+.confirm{width:100%;padding:16px;font-size:18px;margin-top:16px;border:0;
+  border-radius:8px;background:#1a73e8;color:#fff}
+.confirm:disabled{background:#aaa}
+.small{padding:8px 12px;font-size:14px;border:1px solid #bbb;background:#fff;
+  border-radius:8px;white-space:nowrap}
+.card{background:#f4f4f4;border-radius:8px;padding:10px;margin-top:14px}
+.msg{color:#c0392b;font-size:.9rem;margin-top:8px;min-height:1.2em}
+table{width:100%;border-collapse:collapse;margin-top:8px;font-size:.95rem}
+td{padding:4px 2px;border-bottom:1px solid #ddd}
+td.r{text-align:right}
+.sum{display:flex;justify-content:space-between;padding:2px 0}
+.pending{color:#c0392b}
+details{margin-top:20px}
