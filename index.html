@@ -11,7 +11,7 @@
 <meta name="theme-color" content="#ffffff">
 </head>
 <body>
-<h1>売上入力 v1-1</h1>
+<h1>売上入力 v1-2</h1>
 
 <label for="date">日付</label>
 <div class="row">
@@ -49,6 +49,15 @@
   <div style="font-size:.85rem;color:#555">本日の一覧（配達日時順）</div>
   <table><tbody id="list"></tbody></table>
 </div>
+
+<details>
+  <summary>接続設定（<span id="confState">未設定</span>）</summary>
+  <label for="confUrl">GASのウェブアプリURL</label>
+  <input id="confUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec">
+  <label for="confTok">トークン</label>
+  <input id="confTok" type="password" placeholder="控えてある64桁の文字列">
+  <button id="confSave" class="small" style="margin-top:10px">保存</button>
+</details>
 
 <script src="./app.js"></script>
 </body>
